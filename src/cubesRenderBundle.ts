@@ -134,6 +134,7 @@ function draw(
 
 // total objects
 const NUM = 10000
+
 async function run(){
     const canvas = document.querySelector('canvas')
     if (!canvas)
@@ -160,7 +161,7 @@ async function run(){
             depthStencilFormat: 'depth24plus'
         })
         passEncoder.setPipeline(pipelineObj.pipeline)
-        // asume we have different objects
+        // assume we have different objects
         // need to change vertex and group on every draw
         // that requires a lot of cpu time for a large NUM
         console.time('recordBundles')
@@ -201,9 +202,12 @@ async function run(){
                 depthStoreOp: 'store',
             }
         }
+
         draw(device, renderPassDescriptor, renderBundle)
+        
         requestAnimationFrame(frame)
     }
+
     frame()
 
     // re-configure context on resize

@@ -1,13 +1,18 @@
+import { mat4 } from 'gl-matrix'
 import basicVert from './shaders/basic.vert.wgsl?raw'
 import positionFrag from './shaders/position.frag.wgsl?raw'
 import * as cube from './util/cube'
 import { getMvpMatrix } from './util/math'
+import { createInspectorBuffer, initCameraEvents } from './util/utils'
 
 // 1. bbox & matrix into buffer
 // 2. compute pass for frustum culling
 // 3. write instance num (0 or 1) into IndirectBuffer
 
-const NUM = 4
+const RINGS = 10
+const CUBES_PER_RING = 60
+const NUM = CUBES_PER_RING * RINGS
+console.log('NUM', NUM)
 
 // initialize webgpu device & config canvas context
 async function initWebGPU(canvas: HTMLCanvasElement) {
@@ -102,8 +107,9 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
     const bindGroups: GPUBindGroup[] = []
     const mvpBuffer = device.createBuffer({
         label: 'GPUBuffer store 4x4 matrix',
-        size: 4 * 4 * 4 * NUM, // 4 x 4 x float32
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        // size: 4 * 4 * 4 * NUM, // 4 x 4 x float32
+        size: 256 * NUM, // minimum offset is 256
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     })
     for (let i = 0; i < NUM; i++) {
         // create a 4x4 mvp matrix1
@@ -122,7 +128,8 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
                     binding: 0,
                     resource: {
                         buffer: mvpBuffer,
-                        offset: 4 * 4 * 4 * i,
+                        // offset: 4 * 4 * 4 * i,
+                        offset: 256 * i,
                         size: 4 * 4 * 4,
                     }
                 }
@@ -136,7 +143,7 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
     return {pipeline, depthTexture, depthView, vertexBuffer, mvpBuffer, bindGroups}
 }
 
-function createIndirectData(device: GPUDevice) {
+function createInterleavedIndirectData(device: GPUDevice) {
     const indirectBuffer = device.createBuffer({
         label: 'Indirect Buffer',
         size: 4 * 4 * NUM, // 4 x Uint32: vertexCount instanceCount firstVertex firstInstance
@@ -144,18 +151,37 @@ function createIndirectData(device: GPUDevice) {
     })
     const indirectData = new Uint32Array(4 * NUM)
 
+    let offset = 0
     for (let i = 0; i < NUM; i++) {
-        const offset = i * 4
         indirectData[offset + 0] = cube.vertexCount     // vertexCount
         indirectData[offset + 1] = 1                    // instanceCount
         indirectData[offset + 2] = 0                    // firstVertex
         indirectData[offset + 3] = 0                    // firstInstance
+        offset += 4
     }
-
     device.queue.writeBuffer(indirectBuffer, 0, indirectData)
     console.log('indirectData', indirectData)
-    
     return indirectBuffer
+}
+
+function createIndirectData(device: GPUDevice) {
+    const indirectBuffers: GPUBuffer[] = []
+    for (let i = 0; i < NUM; i++) {
+        const indirectBuffer = device.createBuffer({
+            label: 'Indirect Buffer',
+            size: 4 * 4, // 4 x Uint32: vertexCount instanceCount firstVertex firstInstance
+            usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+        })
+        const indirectData = new Uint32Array(4)
+        indirectData[0] = cube.vertexCount     // vertexCount
+        indirectData[1] = 1                    // instanceCount
+        indirectData[2] = 0                    // firstVertex
+        indirectData[3] = 0                    // firstInstance
+        device.queue.writeBuffer(indirectBuffer, 0, indirectData)
+        indirectBuffers.push(indirectBuffer)
+    }
+    console.log('indirectData', indirectBuffers)
+    return indirectBuffers
 }
 
 // create & submit device commands
@@ -198,12 +224,37 @@ function draw(
     for (let i = 0; i < NUM; i++) {
         // draw second cube
         passEncoder.setBindGroup(0, bindGroups[i])
-        // passEncoder.draw(cube.vertexCount)
+        // passEncoder.draw(cube.vertexCount, 1)
         passEncoder.drawIndirect(indirectBuffer, 4 * 4 * i)
     }
     passEncoder.end()
     // webgpu run in a separate process, all the commands will be executed after submit
     device.queue.submit([commandEncoder.finish()])
+}
+
+function genObjectTransforms() {
+    const transforms: any[] = []
+    const height = 50
+    const distance = 40
+    for (let i = 0; i < RINGS; i++) {
+        for (let j = 0; j < CUBES_PER_RING; j++) {
+            const rad = j / (CUBES_PER_RING - 1) * Math.PI * 2
+            const h = height * i / (RINGS - 1) - height / 2
+            // const position = {x: -span / 2 + ratio * span, y: 0, z: -dist}
+            // const rotation = {x: 0, y: 0, z: 0}
+            // const scale = {x: 1, y: 1, z: 1}    
+            const position = {x: Math.sin(rad) * distance, y: h, z: Math.cos(rad) * distance}
+            const rotation = {x: 0, y: 0, z: 0}
+            const scale = {x: 1, y: 1, z: 1}
+            transforms.push({
+                position,
+                rotation,
+                scale,
+                matrix: mat4.create(),
+            })
+        }
+    }
+    return transforms;
 }
 
 async function run(){
@@ -212,30 +263,41 @@ async function run(){
         throw new Error('No Canvas')
     const {device, context, format, size} = await initWebGPU(canvas)
     const pipelineObj = await initPipeline(device, format, size)
-    const {mvpBuffer} = pipelineObj
+    const { mvpBuffer } = pipelineObj
 
     // default state
     let aspect = size.width / size.height
 
     // indirect
-    const indirectBuffer = createIndirectData(device)
+    const indirectBuffers = createInterleavedIndirectData(device)
+
+    const transforms = genObjectTransforms();
+
+    const camParams = {
+        fovy: 100,
+        near: 0.1, 
+        far: 10000,
+        viewMatrix: mat4.create(),
+    }
+    initCameraEvents(mat => camParams.viewMatrix = mat)
 
     // start loop
     function frame() {
         const now = Date.now() / 1000
-        const dist = 16
         for (let i = 0; i < NUM; i++) {
             const ratio = i / (NUM - 1)
-            const position = {x: -dist / 2 + ratio * dist, y: 0, z: -dist}
-            const rotation = {x: 0, y: 0, z: 0}
-            const scale = {x: 1, y: 1, z: 1}
+            const {position, rotation, scale, matrix} = transforms[i];
+
             rotation.x = Math.sin(now + Math.PI / 4 * ratio)
             rotation.y = Math.cos(now + Math.PI / 4 * ratio)
-            const mvpMatrix = getMvpMatrix(aspect, position, rotation, scale)
-            device.queue.writeBuffer(mvpBuffer, 4 * 4 * 4 * i, mvpMatrix)
+
+            const mvpMatrix = getMvpMatrix(aspect, position, rotation, scale, matrix, camParams)
+
+            // device.queue.writeBuffer(mvpBuffer, 4 * 4 * 4 * i, mvpMatrix)
+            device.queue.writeBuffer(mvpBuffer, 256 * i, mvpMatrix)
         }
         // draw
-        draw(device, context, pipelineObj, indirectBuffer)
+        draw(device, context, pipelineObj, indirectBuffers)
         requestAnimationFrame(frame)
     }
     frame()
