@@ -1,18 +1,30 @@
 import { mat4 } from 'gl-matrix'
-import basicVert from './shaders/basic.vert.wgsl?raw'
-import positionFrag from './shaders/position.frag.wgsl?raw'
-import * as cube from './util/cube'
+import vert from './shaders/normal-mvp.vert.wgsl?raw'
+import farg from './shaders/position-mvp.frag.wgsl?raw'
+import * as model from './util/sphere'
 import { getMvpMatrix } from './util/math'
-import { createInspectorBuffer, initCameraEvents } from './util/utils'
+import { Transform } from './util/types'
+import { createInspectorBuffer, initCameraEvents, initTools } from './util/utils'
 
 // 1. bbox & matrix into buffer
 // 2. compute pass for frustum culling
 // 3. write instance num (0 or 1) into IndirectBuffer
 
-const RINGS = 10
-const CUBES_PER_RING = 60
+const RINGS = 8
+const CUBES_PER_RING = 400
 const NUM = CUBES_PER_RING * RINGS
 console.log('NUM', NUM)
+
+const CAMERA_CONFIG = {
+    fovy: 100,
+    near: 0.1, 
+    far: 10000
+}
+
+const infoRef = {
+    drawcount: 0,
+    bundleRenderMode: false,
+}
 
 // initialize webgpu device & config canvas context
 async function initWebGPU(canvas: HTMLCanvasElement) {
@@ -37,6 +49,53 @@ async function initWebGPU(canvas: HTMLCanvasElement) {
     return {device, context, format, size}
 }
 
+function createInterleavedIndirectBuffer(device: GPUDevice) {
+    const stride = 5
+    const indirectBuffer = device.createBuffer({
+        label: 'Indirect Buffer',
+        size: stride * 4 * NUM, // 4 x Uint32: vertexCount instanceCount firstVertex firstInstance
+        usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+    })
+    const indirectData = new Uint32Array(stride * NUM)
+
+    let offset = 0
+    for (let i = 0; i < NUM; i++) {
+        indirectData[offset + 0] = model.indexCount     // indexCount
+        indirectData[offset + 1] = 1                     // instanceCount
+        indirectData[offset + 2] = 0                     // firstIndex
+        indirectData[offset + 3] = 0                     // baseVertex
+        indirectData[offset + 4] = 0                     // firstInstance
+        offset += stride
+    }
+    device.queue.writeBuffer(indirectBuffer, 0, indirectData)
+    console.log('indirectData', indirectData)
+
+    return indirectBuffer
+}
+
+function createIndirectBuffers(device: GPUDevice) {
+    const stride = 5
+    const indirectBuffers: GPUBuffer[] = []
+    for (let i = 0; i < NUM; i++) {
+        const indirectBuffer = device.createBuffer({
+            label: 'Indirect Buffer',
+            size: stride * 4, // stride x Uint32: vertexCount instanceCount firstVertex firstInstance
+            usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+        })
+        const indirectData = new Uint32Array(stride)
+        indirectData[0] = model.indexCount     // indexCount
+        indirectData[1] = 1                     // instanceCount
+        indirectData[2] = 0                     // firstIndex
+        indirectData[3] = 0                     // baseVertex
+        indirectData[4] = 0                     // firstInstance
+        device.queue.writeBuffer(indirectBuffer, 0, indirectData)
+        indirectBuffers.push(indirectBuffer)
+    }
+    console.log('indirectData', indirectBuffers)
+
+    return indirectBuffers
+}
+
 // create pipiline & buffers
 async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{width:number, height:number}) {
     const pipeline = await device.createRenderPipelineAsync({
@@ -44,11 +103,11 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
         layout: 'auto',
         vertex: {
             module: device.createShaderModule({
-                code: basicVert,
+                code: vert,
             }),
             entryPoint: 'main',
             buffers: [{
-                arrayStride: 5 * 4, // 3 position 2 uv,
+                arrayStride: 8 * 4, // 3 position 3 normal 2 uv,
                 attributes: [
                     {
                         // position
@@ -57,17 +116,23 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
                         format: 'float32x3',
                     },
                     {
-                        // uv
+                        // normal
                         shaderLocation: 1,
                         offset: 3 * 4,
+                        format: 'float32x3',
+                    },
+                    {
+                        // uv
+                        shaderLocation: 2,
+                        offset: 6 * 4,
                         format: 'float32x2',
-                    }
+                    },
                 ]
             }]
         },
         fragment: {
             module: device.createShaderModule({
-                code: positionFrag,
+                code: farg,
             }),
             entryPoint: 'main',
             targets: [
@@ -99,10 +164,17 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
     // create vertex buffer
     const vertexBuffer = device.createBuffer({
         label: 'GPUBuffer store vertex',
-        size: cube.vertex.byteLength,
+        size: model.vertex.byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
-    device.queue.writeBuffer(vertexBuffer, 0, cube.vertex)
+    device.queue.writeBuffer(vertexBuffer, 0, model.vertex)
+
+    const indexBuffer = device.createBuffer({
+        label: 'GPUBuffer store index',
+        size: model.index.byteLength,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+    })
+    device.queue.writeBuffer(indexBuffer, 0, model.index)
 
     const bindGroups: GPUBindGroup[] = []
     const mvpBuffer = device.createBuffer({
@@ -139,66 +211,147 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
         bindGroups.push(group)
     }
 
+    const indirectBuffer = createInterleavedIndirectBuffer(device)
+
     // return all vars
-    return {pipeline, depthTexture, depthView, vertexBuffer, mvpBuffer, bindGroups}
+    return {pipeline, depthTexture, depthView, vertexBuffer, indexBuffer, mvpBuffer, bindGroups, indirectBuffer}
 }
 
-function createInterleavedIndirectData(device: GPUDevice) {
-    const indirectBuffer = device.createBuffer({
-        label: 'Indirect Buffer',
-        size: 4 * 4 * NUM, // 4 x Uint32: vertexCount instanceCount firstVertex firstInstance
-        usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
-    })
-    const indirectData = new Uint32Array(4 * NUM)
+// function genObjectTransforms(): [Transform[]] {
+//     const transforms: Transform[] = []
+//     const height = RINGS * 10
+//     const distance = 10
+//     for (let i = 0; i < RINGS; i++) {
+//         for (let j = 0; j < CUBES_PER_RING; j++) {
+//             const rad = j / (CUBES_PER_RING - 1) * Math.PI * 2
+//             const h = height * i / (RINGS - 1) - height / 2
+//             const currDist = distance + i * 2
+//             const position = {x: Math.sin(rad) * currDist, y: h, z: Math.cos(rad) * currDist}
+//             const rotation = {x: 0, y: 0, z: 0}
+//             const scale = {x: 1, y: 1, z: 1}
+//             transforms.push({
+//                 position,
+//                 rotation,
+//                 scale,
+//                 matrix: mat4.create(),
+//                 boundingSphere: {
+//                     center: position,
+//                     radius: 1,
+//                 }
+//             })
+//         }
+//     }
+//     return [transforms];
+// }
 
-    let offset = 0
-    for (let i = 0; i < NUM; i++) {
-        indirectData[offset + 0] = cube.vertexCount     // vertexCount
-        indirectData[offset + 1] = 1                    // instanceCount
-        indirectData[offset + 2] = 0                    // firstVertex
-        indirectData[offset + 3] = 0                    // firstInstance
-        offset += 4
+function genObjectInterleavedTransforms(): [Transform[], Float32Array] {
+    const transforms: Transform[] = []
+    const mvpArray = new Float32Array(16 * NUM)
+    const height = RINGS * 10
+    const distance = 10
+    for (let i = 0; i < RINGS; i++) {
+        for (let j = 0; j < CUBES_PER_RING; j++) {
+            const rad = j / (CUBES_PER_RING - 1) * Math.PI * 2
+            const h = height * i / (RINGS - 1) - height / 2
+            const currDist = distance + i * 2
+            const position = {x: Math.sin(rad) * currDist, y: h, z: Math.cos(rad) * currDist}
+            const rotation = {x: 0, y: 0, z: 0}
+            const scale = {x: 1, y: 1, z: 1}
+            transforms.push({
+                position,
+                rotation,
+                scale,
+                matrix: mat4.create(),
+                boundingSphere: {
+                    center: position,
+                    radius: 1,
+                }
+            })
+        }
     }
-    device.queue.writeBuffer(indirectBuffer, 0, indirectData)
-    console.log('indirectData', indirectData)
-    return indirectBuffer
+    return [transforms, mvpArray];
 }
 
-function createIndirectData(device: GPUDevice) {
-    const indirectBuffers: GPUBuffer[] = []
-    for (let i = 0; i < NUM; i++) {
-        const indirectBuffer = device.createBuffer({
-            label: 'Indirect Buffer',
-            size: 4 * 4, // 4 x Uint32: vertexCount instanceCount firstVertex firstInstance
-            usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+let renderBundles: GPURenderBundle[] | null = null
+
+function drawRenderBundle(
+    device: GPUDevice, 
+    context: GPUCanvasContext,
+    format: GPUTextureFormat,
+    pipelineObj: {
+        pipeline: GPURenderPipeline,
+        vertexBuffer: GPUBuffer,
+        indexBuffer: GPUBuffer,
+        depthView: GPUTextureView,
+        mvpBuffer: GPUBuffer,
+        bindGroups: GPUBindGroup[],
+        indirectBuffer: GPUBuffer,
+    },
+) {
+    const {pipeline, depthView, vertexBuffer, indexBuffer, bindGroups, indirectBuffer} = pipelineObj;
+
+    infoRef.drawcount = 0
+
+    if (!renderBundles) {
+        const bundleEncoder = device.createRenderBundleEncoder({
+            colorFormats: [format],
+            depthStencilFormat: 'depth24plus'
         })
-        const indirectData = new Uint32Array(4)
-        indirectData[0] = cube.vertexCount     // vertexCount
-        indirectData[1] = 1                    // instanceCount
-        indirectData[2] = 0                    // firstVertex
-        indirectData[3] = 0                    // firstInstance
-        device.queue.writeBuffer(indirectBuffer, 0, indirectData)
-        indirectBuffers.push(indirectBuffer)
+        bundleEncoder.setPipeline(pipeline)
+        bundleEncoder.setVertexBuffer(0, vertexBuffer)
+        bundleEncoder.setIndexBuffer(indexBuffer, "uint16")
+        for (let i = 0; i < NUM; i++) {
+            bundleEncoder.setBindGroup(0, bindGroups[i])
+            // passEncoder.draw(cube.vertexCount, 1)
+            bundleEncoder.drawIndexedIndirect(indirectBuffer, 5 * 4 * i)
+
+            infoRef.drawcount++
+        }
+        renderBundles = [bundleEncoder.finish()]
     }
-    console.log('indirectData', indirectBuffers)
-    return indirectBuffers
+
+    const commandEncoder = device.createCommandEncoder()
+    const renderPassDescriptor: GPURenderPassDescriptor = {
+        colorAttachments: [
+            {
+                view: context.getCurrentTexture().createView(),
+                clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
+                loadOp: 'clear',
+                storeOp: 'store'
+            }
+        ],
+        depthStencilAttachment: {
+            view: depthView,
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'store',
+        }
+    }
+    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor)
+    passEncoder.executeBundles(renderBundles)
+    passEncoder.end()
+
+    infoRef.drawcount++
+
+    device.queue.submit([commandEncoder.finish()])
 }
 
-// create & submit device commands
-function draw(
+function drawNormalPass(
     device: GPUDevice, 
     context: GPUCanvasContext,
     pipelineObj: {
         pipeline: GPURenderPipeline,
         vertexBuffer: GPUBuffer,
+        indexBuffer: GPUBuffer,
         depthView: GPUTextureView,
         mvpBuffer: GPUBuffer,
         bindGroups: GPUBindGroup[],
+        indirectBuffer: GPUBuffer,
     },
-    indirectBuffer: GPUBuffer,
 ) {
-    const {pipeline, depthView, vertexBuffer, bindGroups} = pipelineObj;
-    // start encoder
+    infoRef.drawcount = 0
+
+    const {pipeline, depthView, vertexBuffer, indexBuffer, bindGroups, indirectBuffer} = pipelineObj;
     const commandEncoder = device.createCommandEncoder()
     const renderPassDescriptor: GPURenderPassDescriptor = {
         colorAttachments: [
@@ -218,43 +371,17 @@ function draw(
     }
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor)
     passEncoder.setPipeline(pipeline)
-    // set vertex
     passEncoder.setVertexBuffer(0, vertexBuffer)
-    // indirect draws
+    passEncoder.setIndexBuffer(indexBuffer, "uint16")
     for (let i = 0; i < NUM; i++) {
-        // draw second cube
         passEncoder.setBindGroup(0, bindGroups[i])
         // passEncoder.draw(cube.vertexCount, 1)
-        passEncoder.drawIndirect(indirectBuffer, 4 * 4 * i)
+        passEncoder.drawIndexedIndirect(indirectBuffer, 5 * 4 * i)
+
+        infoRef.drawcount++
     }
     passEncoder.end()
-    // webgpu run in a separate process, all the commands will be executed after submit
     device.queue.submit([commandEncoder.finish()])
-}
-
-function genObjectTransforms() {
-    const transforms: any[] = []
-    const height = 50
-    const distance = 40
-    for (let i = 0; i < RINGS; i++) {
-        for (let j = 0; j < CUBES_PER_RING; j++) {
-            const rad = j / (CUBES_PER_RING - 1) * Math.PI * 2
-            const h = height * i / (RINGS - 1) - height / 2
-            // const position = {x: -span / 2 + ratio * span, y: 0, z: -dist}
-            // const rotation = {x: 0, y: 0, z: 0}
-            // const scale = {x: 1, y: 1, z: 1}    
-            const position = {x: Math.sin(rad) * distance, y: h, z: Math.cos(rad) * distance}
-            const rotation = {x: 0, y: 0, z: 0}
-            const scale = {x: 1, y: 1, z: 1}
-            transforms.push({
-                position,
-                rotation,
-                scale,
-                matrix: mat4.create(),
-            })
-        }
-    }
-    return transforms;
 }
 
 async function run(){
@@ -268,36 +395,54 @@ async function run(){
     // default state
     let aspect = size.width / size.height
 
-    // indirect
-    const indirectBuffers = createInterleavedIndirectData(device)
-
-    const transforms = genObjectTransforms();
+    const [transforms, mvpArray] = genObjectInterleavedTransforms();
 
     const camParams = {
-        fovy: 100,
-        near: 0.1, 
-        far: 10000,
+        ...CAMERA_CONFIG,
         viewMatrix: mat4.create(),
+        projectionMatrix: mat4.create(),
     }
-    initCameraEvents(mat => camParams.viewMatrix = mat)
+
+    initCameraEvents(canvas, mat => camParams.viewMatrix = mat)
+
+    const {stats, gui} = initTools();
+    const drawcountControl = gui.add(infoRef, 'drawcount')
+    const bundleControl = gui.add(infoRef, 'bundleRenderMode')
 
     // start loop
     function frame() {
+        stats.begin()
+
+        // ------
+        // Main loop
+        // ------
+
         const now = Date.now() / 1000
+        let offset = 0
         for (let i = 0; i < NUM; i++) {
             const ratio = i / (NUM - 1)
             const {position, rotation, scale, matrix} = transforms[i];
-
             rotation.x = Math.sin(now + Math.PI / 4 * ratio)
             rotation.y = Math.cos(now + Math.PI / 4 * ratio)
-
             const mvpMatrix = getMvpMatrix(aspect, position, rotation, scale, matrix, camParams)
-
-            // device.queue.writeBuffer(mvpBuffer, 4 * 4 * 4 * i, mvpMatrix)
-            device.queue.writeBuffer(mvpBuffer, 256 * i, mvpMatrix)
+            mvpArray.set(mvpMatrix, offset)
+            offset += 16
         }
-        // draw
-        draw(device, context, pipelineObj, indirectBuffers)
+
+        device.queue.writeBuffer(mvpBuffer, 0, mvpArray)
+
+        if (infoRef.bundleRenderMode) {
+            drawRenderBundle(device, context, format, pipelineObj)
+        } else {
+            drawNormalPass(device, context, pipelineObj)
+        }
+
+        // ------
+        // Main loop
+        // ------
+
+        stats.end()
+        drawcountControl.updateDisplay()
         requestAnimationFrame(frame)
     }
     frame()
