@@ -11,7 +11,7 @@ export function createInspectorBuffer(device: GPUDevice, size: number) {
     return buffer
 }
 
-export function initCameraEvents(canvas: HTMLCanvasElement, onCameraChange: (viewMatrix: Float32Array) => void) {
+export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (viewMatrix: Float32Array) => void): () => void {
     let mousePos: [number, number] | null = null;
     let mouseDown = false;
     let width = 0, height = 0
@@ -30,7 +30,7 @@ export function initCameraEvents(canvas: HTMLCanvasElement, onCameraChange: (vie
     const position = {x: 0, y: 0, z: 0}
     const rotation = {x: 0, y: 0, z: 0}
     const scale = {x: 1, y: 1, z: 1}
-    const speed = 0.006
+    const speed = 0.01
     const viewMatrix = mat4.create()
 
     const update = () => {
@@ -40,9 +40,9 @@ export function initCameraEvents(canvas: HTMLCanvasElement, onCameraChange: (vie
             const [x, y] = mousePos
 
             if (x < halfWidth - 10) {
-                rotation.y -= speed
-            } else if (x > halfWidth + 10) {
                 rotation.y += speed
+            } else if (x > halfWidth + 10) {
+                rotation.y -= speed
             }
 
             // if (y < halfHeight - 10) {
@@ -54,10 +54,8 @@ export function initCameraEvents(canvas: HTMLCanvasElement, onCameraChange: (vie
             mat4.invert(viewMatrix, getModelMatrix(position, rotation, scale, viewMatrix))
             onCameraChange(viewMatrix as Float32Array)
         }
-        requestAnimationFrame(update)
     }
-    // setInterval(update, 16.6)
-    update()
+    return update
 }
 
 export function initTools() {
@@ -65,7 +63,9 @@ export function initTools() {
     stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
     document.body.appendChild(stats.dom);
 
-    const gui = new dat.GUI();
+    const gui = new dat.GUI({
+        name: 'GUI',
+    });
 
     return {stats, gui}
 }

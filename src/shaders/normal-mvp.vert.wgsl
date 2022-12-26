@@ -1,8 +1,5 @@
-// @group(0) @binding(0) var<storage> modelViews : array<mat4x4<f32>>;
-// @group(0) @binding(1) var<uniform> projection : mat4x4<f32>;
-// @group(0) @binding(2) var<storage> colors : array<vec4<f32>>;
-
-@binding(0) @group(0) var<uniform> mvpMatrix : mat4x4<f32>;
+@group(0) @binding(0) var<storage> vpMatrix : mat4x4<f32>;
+@group(1) @binding(0) var<storage> modelMatrix : mat4x4<f32>;
 
 struct VertexOutput {
     @builtin(position) Position : vec4<f32>,
@@ -17,6 +14,7 @@ fn main(
     @location(1) normal : vec3<f32>,
     @location(2) uv : vec2<f32>,
 ) -> VertexOutput {
+    var mvpMatrix : mat4x4<f32> = vpMatrix * modelMatrix;
     var output : VertexOutput;
     var pos : vec4<f32> = mvpMatrix * position;
     output.Position = pos;

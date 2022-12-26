@@ -78,4 +78,22 @@ function getProjectionMatrix(
     return outMatrix as Float32Array
 }
 
-export { getMvpMatrix, getModelViewMatrix, getProjectionMatrix, getModelMatrix }
+function clamp( out: vec3, input: vec3, min: vec3, max: vec3 ): vec3 {
+
+    out[0] = Math.max( min[0], Math.min( max[0], input[0] ) );
+    out[1] = Math.max( min[1], Math.min( max[1], input[1] ) );
+    out[2] = Math.max( min[2], Math.min( max[2], input[2] ) );
+
+    return out;
+
+}
+
+function distanceToSquared( a: vec3, b: vec3 ): number {
+    const dx = a[0] - b[0]
+    const dy = a[1] - b[1]
+    const dz = a[2] - b[2]
+
+    return dx * dx + dy * dy + dz * dz;
+}
+
+export { getMvpMatrix, getModelViewMatrix, getProjectionMatrix, getModelMatrix, clamp, distanceToSquared }

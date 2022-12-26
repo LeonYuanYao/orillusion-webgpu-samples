@@ -1,6 +1,6 @@
 declare module "stats.js" {
   export class Stats {
-    new(): any;
+    constructor(...args: any[]);
     [key: string]: any;
   }
   export default Stats;
@@ -8,7 +8,7 @@ declare module "stats.js" {
 
 declare module "dat.gui" {
   export class GUI {
-    new(): any;
+    constructor(...args: any[]);
     [key: string]: any;
   }
 }
