@@ -7,9 +7,11 @@ export class Box3 {
   min: vec3;
   max: vec3;
 
-  constructor(min = vec3.create(), max = vec3.create()) {
-    this.min = min;
-    this.max = max;
+  constructor(min?: vec3, max?: vec3) {
+		this.min = vec3.fromValues(Infinity, Infinity, Infinity);
+		this.max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
+		min && vec3.copy(this.min, min)
+		max && vec3.copy(this.max, max)
   }
 
   clampPoint( point: vec3, target: vec3 ) {

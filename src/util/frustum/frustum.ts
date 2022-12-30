@@ -5,7 +5,20 @@ import { Sphere } from "./sphere";
 
 export class Frustum {
 
-  planes: [Plane, Plane, Plane, Plane, Plane, Plane]
+  planes: [Plane, Plane, Plane, Plane, Plane, Plane];
+
+  private _array = new Float32Array(6 * 4);
+
+  get array() {
+    for (let i = 0; i < this.planes.length; i++) {
+        const plane = this.planes[i]
+        this._array[i * 4 + 0] = plane.normal[0]
+        this._array[i * 4 + 1] = plane.normal[1]
+        this._array[i * 4 + 2] = plane.normal[2]
+        this._array[i * 4 + 3] = plane.constant
+    }
+    return this._array
+  }
 
 	constructor( p0 = new Plane(), p1 = new Plane(), p2 = new Plane(), p3 = new Plane(), p4 = new Plane(), p5 = new Plane() ) {
 

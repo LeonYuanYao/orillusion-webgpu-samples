@@ -1,4 +1,4 @@
-@group(0) @binding(0) var<storage> vpMatrix : mat4x4<f32>;
+@group(0) @binding(0) var<uniform> vpMatrix : mat4x4<f32>;
 @group(1) @binding(0) var<storage> modelMatrix : mat4x4<f32>;
 
 struct VertexOutput {

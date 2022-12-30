@@ -4,12 +4,12 @@ import { Box3 } from "./box";
 import { Plane } from "./plane";
 
 export class Sphere {
-  radius: number;
-  center: vec3 = vec3.create();
+  radius = 0;
+  center = vec3.create();
 
-  constructor(center = vec3.create(), radius = 0) {
-    this.radius = radius
-    vec3.copy(this.center, center);
+  constructor(center?: vec3, radius?: number) {
+    this.radius = radius ?? this.radius;
+    center && vec3.copy(this.center, center);
   }
 
   intersectsSphere( sphere: Sphere ) {

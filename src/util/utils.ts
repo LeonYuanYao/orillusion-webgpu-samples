@@ -11,7 +11,7 @@ export function createInspectorBuffer(device: GPUDevice, size: number) {
     return buffer
 }
 
-export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (viewMatrix: Float32Array) => void): () => void {
+export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (viewMatrix: Float32Array) => void) {
     let mousePos: [number, number] | null = null;
     let mouseDown = false;
     let width = 0, height = 0
@@ -30,7 +30,7 @@ export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (v
     const position = {x: 0, y: 0, z: 0}
     const rotation = {x: 0, y: 0, z: 0}
     const scale = {x: 1, y: 1, z: 1}
-    const speed = 0.01
+    const speed = 0.005
     const viewMatrix = mat4.create()
 
     const update = () => {
@@ -54,8 +54,9 @@ export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (v
             mat4.invert(viewMatrix, getModelMatrix(position, rotation, scale, viewMatrix))
             onCameraChange(viewMatrix as Float32Array)
         }
+        requestAnimationFrame(update)
     }
-    return update
+    update()
 }
 
 export function initTools() {
@@ -68,4 +69,26 @@ export function initTools() {
     });
 
     return {stats, gui}
+}
+
+let bufferMap = new Map<number, GPUBuffer[]>()
+export function getReadbackBuffer(device: GPUDevice, size: number): [GPUBuffer, () => void] {
+    let availableBuffers = bufferMap.get(size)
+    if (!availableBuffers) {
+        availableBuffers = []
+        bufferMap.set(size, availableBuffers)
+    }
+    
+    const buffer = availableBuffers.pop() ?? device.createBuffer({
+        label: 'readback buffer',
+        size,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    })
+
+    const release = () => {
+        const buffers = bufferMap.get(size) ?? []
+        buffers.push(buffer)
+    }
+
+    return [buffer, release]
 }
