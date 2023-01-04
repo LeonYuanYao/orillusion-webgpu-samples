@@ -15,18 +15,17 @@ import { Box3 } from './util/frustum/box'
 // 3. write instance num (0 or 1) into IndirectBuffer
 
 const RINGS = 50
-const CUBES_PER_RING = 600
+const CUBES_PER_RING = 200
 const NUM = CUBES_PER_RING * RINGS
 const DURATION = 2000
 const VELOCITY_SCALE = 0.3
-console.log('NUM', NUM)
-
 const CAMERA_CONFIG = {
     fovy: 100,
     near: 0.1, 
     far: 10000,
     position: {x: 0, y: 0, z: 0},
 }
+console.log('NUM', NUM)
 
 const infoRef: {[key: string]: any} = {
     NUM: NUM.toString(),
@@ -39,6 +38,19 @@ const infoRef: {[key: string]: any} = {
     culling: true,
 }
 
+const {stats, gui} = initTools();
+const controls = [
+    gui.add(infoRef, 'NUM'),
+    gui.add(infoRef, 'drawCount'),
+    gui.add(infoRef, 'computeCount'),
+    gui.add(infoRef, 'jsTime'),
+    gui.add(infoRef, 'drawTime'),
+    gui.add(infoRef, 'indirectDraw'),
+    gui.add(infoRef, 'bundleRender'),
+    gui.add(infoRef, 'culling'),
+];
+
+// Model VB & IB data
 const model = await loadBoomBox() // sphere
 
 // initialize webgpu device & config canvas context
@@ -730,29 +742,17 @@ async function run(){
     // default state
     let aspect = size.width / size.height
 
-    const {stats, gui} = initTools();
-    const controls = [
-        gui.add(infoRef, 'NUM'),
-        gui.add(infoRef, 'drawCount'),
-        gui.add(infoRef, 'computeCount'),
-        gui.add(infoRef, 'jsTime'),
-        gui.add(infoRef, 'drawTime'),
-        gui.add(infoRef, 'indirectDraw'),
-        gui.add(infoRef, 'bundleRender'),
-        gui.add(infoRef, 'culling'),
-    ];
-
     const [transforms, transformArray] = genObjectInterleavedTransforms()
     device.queue.writeBuffer(modelDataBuffer, 0, transformArray)
 
-    const refreshData = () => {
+    const refreshModelDataAndBuffer = () => {
         createInterleavedIndirectBuffer(device, indirectBuffer)
         genObjectInterleavedTransforms(transforms, transformArray)
         device.queue.writeBuffer(modelDataBuffer, 0, transformArray)
     }
-    controls[5].onChange(refreshData)
-    controls[6].onChange(refreshData)
-    controls[7].onChange(refreshData)
+    controls[5].onChange(refreshModelDataAndBuffer)
+    controls[6].onChange(refreshModelDataAndBuffer)
+    controls[7].onChange(refreshModelDataAndBuffer)
     
     const camParams = {
         ...CAMERA_CONFIG,
@@ -802,8 +802,8 @@ async function run(){
         controls.forEach(v => v.updateDisplay())
 
         stats.end()
-
     }
+
     frame()
 
     // re-configure context on resize
