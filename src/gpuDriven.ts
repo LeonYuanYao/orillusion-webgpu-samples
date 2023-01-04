@@ -4,9 +4,8 @@ import fragment from './shaders/position-mvp.frag.wgsl?raw'
 import updateShader from './shaders/compute.update.wgsl?raw'
 import cullingShader from './shaders/compute.culling.wgsl?raw'
 import * as sphere from './util/sphere'
-import * as cube from './util/cube'
 import { getModelMatrix, getProjectionMatrix } from './util/math'
-import { createInspectorBuffer, regCameraViewEvent, initTools } from './util/utils'
+import { regCameraViewEvent, initTools, loadBoomBox } from './util/utils'
 import { Frustum } from './util/frustum/frustum'
 import { Sphere } from './util/frustum/sphere'
 import { Box3 } from './util/frustum/box'
@@ -15,10 +14,10 @@ import { Box3 } from './util/frustum/box'
 // 2. compute pass for frustum culling
 // 3. write instance num (0 or 1) into IndirectBuffer
 
-const RINGS = 40
-const CUBES_PER_RING = 1200
+const RINGS = 50
+const CUBES_PER_RING = 600
 const NUM = CUBES_PER_RING * RINGS
-const DURATION = 4000
+const DURATION = 2000
 const VELOCITY_SCALE = 0.3
 console.log('NUM', NUM)
 
@@ -39,6 +38,8 @@ const infoRef: {[key: string]: any} = {
     bundleRender: false,
     culling: true,
 }
+
+const model = await loadBoomBox() // sphere
 
 // initialize webgpu device & config canvas context
 async function initWebGPU(canvas: HTMLCanvasElement) {
@@ -76,7 +77,7 @@ function createInterleavedIndirectBuffer(device: GPUDevice, indirectBuffer?: GPU
 
     let offset = 0
     for (let i = 0; i < NUM; i++) {
-        indirectData[offset + 0] = sphere.indexCount     // indexCount
+        indirectData[offset + 0] = model.indexCount      // indexCount
         indirectData[offset + 1] = 1                     // instanceCount
         indirectData[offset + 2] = 0                     // firstIndex
         indirectData[offset + 3] = 0                     // baseVertex
@@ -98,7 +99,7 @@ function createInterleavedIndirectBuffer(device: GPUDevice, indirectBuffer?: GPU
 //             usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
 //         })
 //         const indirectData = new Uint32Array(stride)
-//         indirectData[0] = sphere.indexCount     // indexCount
+//         indirectData[0] = model.indexCount      // indexCount
 //         indirectData[1] = 1                     // instanceCount
 //         indirectData[2] = 0                     // firstIndex
 //         indirectData[3] = 0                     // baseVertex
@@ -112,13 +113,12 @@ function createInterleavedIndirectBuffer(device: GPUDevice, indirectBuffer?: GPU
 
 // create pipiline & buffers
 
-interface Pipeline {
+interface PipelineObj {
     pipeline: GPURenderPipeline;
     depthTexture: GPUTexture;
     depthView: GPUTextureView;
-    sphereVB: GPUBuffer;
-    sphereIB: GPUBuffer;
-    cubeVB: GPUBuffer;
+    modelVB: GPUBuffer;
+    modelIB: GPUBuffer;
     modelDataBuffer: GPUBuffer;
     vpBuffer: GPUBuffer;
     bindGroups: GPUBindGroup[];
@@ -133,7 +133,7 @@ interface Pipeline {
     cullingBindGroup: GPUBindGroup;
 }
 
-async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{width:number, height:number}): Promise<Pipeline> {
+async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{width:number, height:number}): Promise<PipelineObj> {
     const pipeline = await device.createRenderPipelineAsync({
         label: 'Basic Pipline',
         layout: 'auto',
@@ -195,28 +195,20 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
     })
     const depthView = depthTexture.createView()
 
-    // create vertex buffer SPHERE
-    const sphereVB = device.createBuffer({
-        label: 'sphere vertex buffer',
-        size: sphere.vertex.byteLength,
+    // create model vertex buffer
+    const modelVB = device.createBuffer({
+        label: 'model vertex buffer',
+        size: model.vertex.byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
-    device.queue.writeBuffer(sphereVB, 0, sphere.vertex)
+    device.queue.writeBuffer(modelVB, 0, model.vertex)
 
-    const sphereIB = device.createBuffer({
-        label: 'sphere index buffer',
-        size: sphere.index.byteLength,
+    const modelIB = device.createBuffer({
+        label: 'model index buffer',
+        size: model.index.byteLength,
         usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     })
-    device.queue.writeBuffer(sphereIB, 0, sphere.index)
-
-    // create vertex buffer CUBE
-    const cubeVB = device.createBuffer({
-        label: 'cube vertex buffer',
-        size: cube.vertex.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    })
-    device.queue.writeBuffer(cubeVB, 0, cube.vertex)
+    device.queue.writeBuffer(modelIB, 0, model.index)
 
     // Uniforms
     const vpBuffer = device.createBuffer({
@@ -225,7 +217,7 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
     const vpBindGroup = device.createBindGroup({
-        label: 'ViewProjection UBO',
+        label: 'ViewProjection BindGroup',
         layout: pipeline.getBindGroupLayout(0),
         entries: [{
                 binding: 0,
@@ -377,9 +369,8 @@ async function initPipeline(device: GPUDevice, format: GPUTextureFormat, size:{w
         pipeline, 
         depthTexture, 
         depthView, 
-        sphereVB, 
-        sphereIB,
-        cubeVB, 
+        modelVB, 
+        modelIB,
         modelDataBuffer, 
         vpBuffer, 
         bindGroups, 
@@ -421,9 +412,9 @@ function genObjectInterleavedTransforms(transforms?: Transform[], transformArray
     const distance = CUBES_PER_RING / 4
 
     let offset = 0
-    const center = vec3.fromValues(0.0, 0.0, 0.0);
-    const boxMin = vec3.fromValues(-1.0, -1.0, -1.0);
-    const boxMax = vec3.fromValues(1.0, 1.0, 1.0);
+    const center = vec3.fromValues(0.0, 0.0, 0.0)
+    const boxMin = model.box.min // vec3.fromValues(-1.0, -1.0, -1.0)
+    const boxMax = model.box.max // vec3.fromValues(1.0, 1.0, 1.0)
     for (let i = 0; i < RINGS; i++) {
         for (let j = 0; j < CUBES_PER_RING; j++) {
             const rad = j / (CUBES_PER_RING - 1) * Math.PI * 2
@@ -530,14 +521,14 @@ function drawRenderBundlePass(
     device: GPUDevice, 
     context: GPUCanvasContext,
     format: GPUTextureFormat,
-    pipelineObj: Pipeline,
+    pipelineObj: PipelineObj,
     frustum: Frustum
 ) {
     const {
         pipeline,
         depthView,
-        sphereVB,
-        sphereIB,
+        modelVB,
+        modelIB,
         vpBindGroup,
         bindGroups,
         indirectBuffer,
@@ -552,8 +543,6 @@ function drawRenderBundlePass(
         infoRef.indirectDraw = true
     }
 
-    device.queue.writeBuffer(frustumBuffer, 0, frustum.array)
-
     const commandEncoder = device.createCommandEncoder()
 
     const computePass = commandEncoder.beginComputePass()
@@ -561,13 +550,36 @@ function drawRenderBundlePass(
     computePass.setBindGroup(0, updateBindGroup)
     computePass.dispatchWorkgroups(Math.ceil(NUM / 128))
     infoRef.computeCount++
+
     if (infoRef.culling) {
+        device.queue.writeBuffer(frustumBuffer, 0, frustum.array)
         computePass.setPipeline(cullingPipeline)
         computePass.setBindGroup(0, cullingBindGroup)
         computePass.dispatchWorkgroups(Math.ceil(NUM / 128))
-        infoRef.computeCount++  
+        infoRef.computeCount++
     }
+
     computePass.end()
+
+    infoRef.drawTime = 0
+    const t1 = performance.now()
+
+    if (!renderBundles) {
+        const bundleEncoder = device.createRenderBundleEncoder({
+            colorFormats: [format],
+            depthStencilFormat: 'depth24plus'
+        })
+        bundleEncoder.setPipeline(pipeline)
+        bundleEncoder.setBindGroup(0, vpBindGroup)
+        for (let i = 0; i < NUM; i++) {
+            bundleEncoder.setVertexBuffer(0, modelVB)
+            bundleEncoder.setIndexBuffer(modelIB, "uint16")
+            bundleEncoder.setBindGroup(1, bindGroups[i])
+            bundleEncoder.drawIndexedIndirect(indirectBuffer, 5 * i * Uint32Array.BYTES_PER_ELEMENT)
+            infoRef.drawCount++
+        }
+        renderBundles = [bundleEncoder.finish()]
+    }
 
     const renderPassDescriptor: GPURenderPassDescriptor = {
         colorAttachments: [
@@ -586,36 +598,19 @@ function drawRenderBundlePass(
         }
     }
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor)
-
-    if (!renderBundles) {
-        const bundleEncoder = device.createRenderBundleEncoder({
-            colorFormats: [format],
-            depthStencilFormat: 'depth24plus'
-        })
-        bundleEncoder.setPipeline(pipeline)
-        bundleEncoder.setBindGroup(0, vpBindGroup)
-        bundleEncoder.setVertexBuffer(0, sphereVB)
-        bundleEncoder.setIndexBuffer(sphereIB, "uint16")
-        for (let i = 0; i < NUM; i++) {
-            bundleEncoder.setBindGroup(1, bindGroups[i])
-            bundleEncoder.drawIndexedIndirect(indirectBuffer, 5 * i * Uint32Array.BYTES_PER_ELEMENT)
-            infoRef.drawCount++
-        }
-        renderBundles = [bundleEncoder.finish()]
-    }
-    
     passEncoder.executeBundles(renderBundles)
     passEncoder.end()
 
     device.queue.submit([commandEncoder.finish()])
 
+    infoRef.drawTime = (performance.now() - t1).toFixed(3)
     infoRef.drawCount++
 }
 
 function drawNormalPass(
     device: GPUDevice, 
     context: GPUCanvasContext,
-    pipelineObj: Pipeline,
+    pipelineObj: PipelineObj,
     frustum: Frustum,
     time: number,
     modelData: Float32Array,
@@ -623,8 +618,8 @@ function drawNormalPass(
     const {
         pipeline,
         depthView,
-        sphereVB,
-        sphereIB,
+        modelVB,
+        modelIB,
         vpBindGroup,
         bindGroups,
         indirectBuffer,
@@ -641,6 +636,9 @@ function drawNormalPass(
     computePass.dispatchWorkgroups(Math.ceil(NUM / 128))
     computePass.end()
     infoRef.computeCount++
+
+    infoRef.drawTime = 0
+    const t1 = performance.now()
 
     const renderPassDescriptor: GPURenderPassDescriptor = {
         colorAttachments: [
@@ -661,8 +659,6 @@ function drawNormalPass(
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor)
     passEncoder.setPipeline(pipeline)
     passEncoder.setBindGroup(0, vpBindGroup)
-    passEncoder.setVertexBuffer(0, sphereVB)
-    passEncoder.setIndexBuffer(sphereIB, "uint16")
 
     if (infoRef.indirectDraw) {
         let offset = 0
@@ -675,33 +671,52 @@ function drawNormalPass(
                 }
                 offset += 5
             }
-            device.queue.writeBuffer(indirectBuffer, 0, indirectData, 0)
+        } else {
+            for (let i = 0; i < NUM; i++) {
+                indirectData[offset + 1] = 1
+                offset += 5
+            }
         }
+        device.queue.writeBuffer(indirectBuffer, 0, indirectData, 0)
 
         offset = 0
         const step = 5 * Uint32Array.BYTES_PER_ELEMENT
-        const t1 = performance.now()
         for (let i = 0; i < NUM; i++) {
-            passEncoder.setBindGroup(1, bindGroups[i])
-            passEncoder.drawIndexedIndirect(indirectBuffer, offset)
-            infoRef.drawCount++
+            if (indirectData[5 * i + 1] > 0) {
+                passEncoder.setVertexBuffer(0, modelVB)
+                passEncoder.setIndexBuffer(modelIB, "uint16")
+                passEncoder.setBindGroup(1, bindGroups[i])
+                passEncoder.drawIndexedIndirect(indirectBuffer, offset)
+                infoRef.drawCount++
+            }
             offset += step
         }
-        infoRef.drawTime = (performance.now() - t1).toFixed(3)
     } else {
-        const t1 = performance.now()
-        for (let i = 0; i < NUM; i++) {
-            if (!infoRef.culling || frustumCulling(frustum, time, modelData, i)) {
+        if (infoRef.culling) {
+            for (let i = 0; i < NUM; i++) {
+                if (frustumCulling(frustum, time, modelData, i)) {
+                    passEncoder.setVertexBuffer(0, modelVB)
+                    passEncoder.setIndexBuffer(modelIB, "uint16")
+                    passEncoder.setBindGroup(1, bindGroups[i])
+                    passEncoder.drawIndexed(model.indexCount, 1)
+                    infoRef.drawCount++
+                }
+            }
+        } else {
+            for (let i = 0; i < NUM; i++) {
+                passEncoder.setVertexBuffer(0, modelVB)
+                passEncoder.setIndexBuffer(modelIB, "uint16")
                 passEncoder.setBindGroup(1, bindGroups[i])
-                passEncoder.drawIndexed(sphere.indexCount, 1)
+                passEncoder.drawIndexed(model.indexCount, 1)
                 infoRef.drawCount++
             }
         }
-        infoRef.drawTime = (performance.now() - t1).toFixed(3)
     }
 
     passEncoder.end()
     device.queue.submit([commandEncoder.finish()])
+
+    infoRef.drawTime = (performance.now() - t1).toFixed(3)
 }
 
 async function run(){
@@ -751,15 +766,16 @@ async function run(){
 
     // start loop
     function frame() {
+        requestAnimationFrame(frame)
+
         stats.begin()
 
         const t1 = performance.now();
         infoRef.drawCount = 0
         infoRef.computeCount = 0
-        infoRef.drawTime = 0
 
         // ------
-        // Main loop
+        // Main loop starts
         // ------
         const now = Math.floor(performance.now())
         device.queue.writeBuffer(timeBuffer, 0, new Uint32Array([now]))
@@ -777,16 +793,16 @@ async function run(){
         }
 
         // ------
-        // Main loop
+        // Main loop ends
         // ------
 
         const t = performance.now() - t1
         infoRef.jsTime = (parseFloat(infoRef.jsTime) * 0.9 + t * 0.1).toFixed(3)
 
-        stats.end()
         controls.forEach(v => v.updateDisplay())
 
-        requestAnimationFrame(frame)
+        stats.end()
+
     }
     frame()
 

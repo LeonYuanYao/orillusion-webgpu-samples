@@ -1,3 +1,6 @@
+import { vec3 } from "gl-matrix"
+import { Box3 } from "./frustum/box"
+
 const vertex = new Float32Array([
     // float3 position, float3 normal, float2 uv
     0,1,0,  0,1,0,  0.05,1,
@@ -309,4 +312,9 @@ const index = new Uint16Array([
 const vertexCount = 121
 const indexCount = 540
 
-export {vertex, index, vertexCount, indexCount}
+const box = new Box3(
+    vec3.fromValues(-1, -1, -1),
+    vec3.fromValues(1, 1, 1),
+)
+
+export {vertex, index, vertexCount, indexCount, box}

@@ -419,7 +419,7 @@ async function run() {
 
     function updateCamera() {
         const aspect = size.width / size.height
-        const projectionMatrix = getProjectionMatrix(aspect, 60 / 180 * Math.PI, 0.1, 1000, { x: 0, y: 10, z: 20 })
+        const projectionMatrix = getProjectionMatrix(aspect, 60, 0.1, 1000, { x: 0, y: 10, z: 20 })
         device.queue.writeBuffer(pipelineObj.cameraProjectionBuffer, 0, projectionMatrix)
     }
     updateCamera()

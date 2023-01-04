@@ -291,7 +291,7 @@ async function run(){
         const time = performance.now() / 5000
         camera.x = 1000 * Math.sin(time)
         camera.z = 1000 * Math.cos(time)
-        const projectionMatrix = getProjectionMatrix(aspect, 60 / 180 * Math.PI, 0.1, 10000, camera)
+        const projectionMatrix = getProjectionMatrix(aspect, 60, 0.1, 10000, camera)
         device.queue.writeBuffer(pipelineObj.projectionBuffer, 0, projectionMatrix)
         draw(device, context, pipelineObj)
         requestAnimationFrame(frame)

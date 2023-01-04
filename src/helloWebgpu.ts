@@ -7,6 +7,8 @@ async function initWebGPU() {
         if(!adapter)
             throw new Error('No adapter found')
         console.log(adapter)
+        const info = await adapter.requestAdapterInfo()
+        console.log(info)
         adapter.features.forEach(value=>{
             console.log(value)
         })

@@ -29,9 +29,9 @@ fn main(
     var boxMax = vec3<f32>(modelData[offset + 19], modelData[offset + 20], modelData[offset + 21]);
 
     if (frustumIntersectsBox(frustum, boxMin, boxMax) > 0) {
-        indirectData[5 * index + 1] = 1; // instance count set to 1
+        indirectData[5 * index + 1] = 1; // instance count set to 1, draw object
     } else {
-        indirectData[5 * index + 1] = 0; // instance count set to 0 to skip drawcall
+        indirectData[5 * index + 1] = 0; // instance count set to 0, skip draw
     }
 }
 

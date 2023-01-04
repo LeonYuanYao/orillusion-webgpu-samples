@@ -2,14 +2,9 @@ import Stats from 'stats.js'
 import dat from 'dat.gui';
 import { mat4 } from 'gl-matrix'
 import { getModelMatrix } from './math';
-
-export function createInspectorBuffer(device: GPUDevice, size: number) {
-    const buffer = device.createBuffer({
-        size,
-        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-    })
-    return buffer
-}
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { Mesh } from 'three'
+import { Box3 } from './frustum/box';
 
 export function regCameraViewEvent(canvas: HTMLCanvasElement, onCameraChange: (viewMatrix: Float32Array) => void) {
     let mousePos: [number, number] | null = null;
@@ -66,6 +61,7 @@ export function initTools() {
 
     const gui = new dat.GUI({
         name: 'GUI',
+        width: 320,
     });
 
     return {stats, gui}
@@ -91,4 +87,58 @@ export function getReadbackBuffer(device: GPUDevice, size: number): [GPUBuffer, 
     }
 
     return [buffer, release]
+}
+
+export function loadBoomBox(): Promise<{
+    vertex: Float32Array;
+    index: Uint16Array;
+    vertexCount: number;
+    indexCount: number;
+    box: Box3;
+}> {
+    return new Promise((resolve, reject) => {
+        const loader = new GLTFLoader()
+        loader.load('http://localhost:3000/public/BoomBox.glb', (gltf) => {
+            const mesh = gltf.scene.children[0] as Mesh
+            const geom = mesh.geometry
+            const vertexCount = geom.attributes.position.count
+            const vertex = new Float32Array(vertexCount * 8) // 3 pos + 3 norm + 2 uv, interleaved vertex data
+            const model = {
+                vertex: vertex,
+                index: geom.index!.array as Uint16Array,
+                vertexCount: vertexCount,
+                indexCount: geom.index!.count,
+                box: new Box3(),
+            }
+            const scale = 100
+            const box = model.box
+            const positions = geom.attributes.position.array
+            const normals = geom.attributes.normal.array
+            const uvs = geom.attributes.uv.array
+            for (let i = 0; i < vertexCount; i++) {
+                const i3 = i * 3
+                const i2 = i * 2
+                const x = positions[i3 + 0] * scale
+                const y = positions[i3 + 1] * scale
+                const z = positions[i3 + 2] * scale
+                box.min[0] = Math.min(box.min[0], x)
+                box.min[1] = Math.min(box.min[1], y)
+                box.min[2] = Math.min(box.min[2], z)
+                box.max[0] = Math.max(box.max[0], x)
+                box.max[1] = Math.max(box.max[1], y)
+                box.max[2] = Math.max(box.max[2], z)
+                vertex[i * 8 + 0] = x
+                vertex[i * 8 + 1] = y
+                vertex[i * 8 + 2] = z
+                vertex[i * 8 + 3] = normals[i3 + 0]
+                vertex[i * 8 + 4] = normals[i3 + 1]
+                vertex[i * 8 + 5] = normals[i3 + 2]
+                vertex[i * 8 + 6] = uvs[i2 + 0]
+                vertex[i * 8 + 7] = uvs[i2 + 1]
+            }
+            resolve(model)
+        }, () => {}, (err) => {
+            reject(err)
+        })
+    })
 }
