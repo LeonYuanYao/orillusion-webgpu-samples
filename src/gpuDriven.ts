@@ -14,10 +14,10 @@ import { Box3 } from './util/frustum/box'
 // 2. compute pass for frustum culling
 // 3. write instance num (0 or 1) into IndirectBuffer
 
-const RINGS = 50
-const CUBES_PER_RING = 200
+const RINGS = 40
+const CUBES_PER_RING = 2000
 const NUM = CUBES_PER_RING * RINGS
-const DURATION = 2000
+const DURATION = 3000
 const VELOCITY_SCALE = 0.3
 const CAMERA_CONFIG = {
     fovy: 100,
@@ -32,7 +32,7 @@ const infoRef: {[key: string]: any} = {
     drawCount: '0',
     computeCount: '0',
     jsTime: '0',
-    drawTime: '0',
+    jsDrawTime: '0',
     indirectDraw: true,
     bundleRender: false,
     culling: true,
@@ -44,14 +44,14 @@ const controls = [
     gui.add(infoRef, 'drawCount'),
     gui.add(infoRef, 'computeCount'),
     gui.add(infoRef, 'jsTime'),
-    gui.add(infoRef, 'drawTime'),
+    gui.add(infoRef, 'jsDrawTime'),
     gui.add(infoRef, 'indirectDraw'),
     gui.add(infoRef, 'bundleRender'),
     gui.add(infoRef, 'culling'),
 ];
 
 // Model VB & IB data
-const model = await loadBoomBox() // sphere
+const model = sphere // await loadBoomBox()
 
 // initialize webgpu device & config canvas context
 async function initWebGPU(canvas: HTMLCanvasElement) {
@@ -573,7 +573,7 @@ function drawRenderBundlePass(
 
     computePass.end()
 
-    infoRef.drawTime = 0
+    infoRef.jsDrawTime = 0
     const t1 = performance.now()
 
     if (!renderBundles) {
@@ -615,7 +615,7 @@ function drawRenderBundlePass(
 
     device.queue.submit([commandEncoder.finish()])
 
-    infoRef.drawTime = (performance.now() - t1).toFixed(3)
+    infoRef.jsDrawTime = (performance.now() - t1).toFixed(3)
     infoRef.drawCount++
 }
 
@@ -649,7 +649,7 @@ function drawNormalPass(
     computePass.end()
     infoRef.computeCount++
 
-    infoRef.drawTime = 0
+    infoRef.jsDrawTime = 0
     const t1 = performance.now()
 
     const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -728,7 +728,7 @@ function drawNormalPass(
     passEncoder.end()
     device.queue.submit([commandEncoder.finish()])
 
-    infoRef.drawTime = (performance.now() - t1).toFixed(3)
+    infoRef.jsDrawTime = (performance.now() - t1).toFixed(3)
 }
 
 async function run(){
